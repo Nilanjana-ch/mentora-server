@@ -45,9 +45,8 @@ async function run() {
 
     // ===== USER রুট =====
 
-    // রেজিস্টারের সময় ইউজার সেভ হবে
     app.post('/users', async (req, res) => {
-      const user = req.body; // { name, email, password, role: student/teacher/alumni }
+      const user = req.body;
       const existing = await usersCollection.findOne({ email: user.email });
       if (existing) return res.send({ message: 'User already exists', insertedId: null });
       user.createdAt = new Date();
@@ -55,32 +54,29 @@ async function run() {
       res.send(result);
     });
 
-    // লগইনের পর email দিয়ে ইউজারের role চেক করার জন্য
     app.get('/users/:email', async (req, res) => {
       const result = await usersCollection.findOne({ email: req.params.email });
       res.send(result || {});
     });
 
-    // নির্দিষ্ট role এর সব ইউজার (যেমন সব teacher/alumni)
     app.get('/users', async (req, res) => {
-  const role = req.query.role;
-  const query = role ? { role: new RegExp(`^${role}$`, 'i') } : {}; // case-insensitive match
-  const result = await usersCollection.find(query).toArray();
-  res.send(result);
-});
+      const role = req.query.role;
+      const query = role ? { role: new RegExp(`^${role}$`, 'i') } : {};
+      const result = await usersCollection.find(query).toArray();
+      res.send(result);
+    });
 
-    // PATCH update own profile (name, skills, cgpa, company, designation etc.)
-app.patch('/users/:email', async (req, res) => {
-  const result = await usersCollection.updateOne(
-    { email: req.params.email },
-    { $set: { ...req.body, email: req.params.email } },
-    { upsert: true }
-  );
-  res.send(result);
-});
+    app.patch('/users/:email', async (req, res) => {
+      const result = await usersCollection.updateOne(
+        { email: req.params.email },
+        { $set: { ...req.body, email: req.params.email } },
+        { upsert: true }
+      );
+      res.send(result);
+    });
+
     // ===== POST রুট (job / internship / research) =====
 
-    // সব পোস্ট (ফিড) — ?type=job/internship/research দিয়ে ফিল্টার করা যাবে
     app.get('/posts', async (req, res) => {
       const type = req.query.type;
       const query = type ? { type } : {};
@@ -88,28 +84,37 @@ app.patch('/users/:email', async (req, res) => {
       res.send(result);
     });
 
-    // নির্দিষ্ট author (teacher/alumni) এর নিজের পোস্টগুলো
     app.get('/posts/author/:email', async (req, res) => {
       const result = await postsCollection.find({ authorEmail: req.params.email }).toArray();
       res.send(result);
     });
 
-    // id wise post
+    // id wise post — invalid/missing id safely handle kora hocche
     app.get('/posts/:id', async (req, res) => {
-      const result = await postsCollection.findOne({ _id: new ObjectId(req.params.id) });
-      res.send(result);
+      try {
+        const id = req.params.id;
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: 'Invalid post id' });
+        }
+        const result = await postsCollection.findOne({ _id: new ObjectId(id) });
+        if (!result) {
+          return res.status(404).send({ message: 'Post not found' });
+        }
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: 'Server error' });
+      }
     });
 
-    // new post create
     app.post('/posts', async (req, res) => {
-      const post = req.body; // { title, description, type, authorEmail, authorName, authorRole }
+      const post = req.body;
       post.interestCount = 0;
       post.createdAt = new Date();
       const result = await postsCollection.insertOne(post);
       res.send(result);
     });
 
-    // post update
     app.patch('/posts/:id', async (req, res) => {
       const result = await postsCollection.updateOne(
         { _id: new ObjectId(req.params.id) },
@@ -118,7 +123,6 @@ app.patch('/users/:email', async (req, res) => {
       res.send(result);
     });
 
-    // post delete
     app.delete('/posts/:id', async (req, res) => {
       const result = await postsCollection.deleteOne({ _id: new ObjectId(req.params.id) });
       res.send(result);
@@ -126,10 +130,8 @@ app.patch('/users/:email', async (req, res) => {
 
     // ===== REQUEST রুট (interest + mentorship) =====
 
-    // student Interest click button or mentor request send
     app.post('/requests', async (req, res) => {
       const request = req.body;
-      // { postId (optional), studentEmail, studentName, recipientEmail, type: post_interest/mentorship, message }
       request.status = 'pending';
       request.createdAt = new Date();
       const result = await requestsCollection.insertOne(request);
@@ -143,43 +145,38 @@ app.patch('/users/:email', async (req, res) => {
       res.send(result);
     });
 
-    // স্টুডেন্ট যেসব রিকোয়েস্ট পাঠিয়েছে (My Requests পেজ)
     app.get('/requests/student/:email', async (req, res) => {
       const result = await requestsCollection.find({ studentEmail: req.params.email }).toArray();
       res.send(result);
     });
 
-    // teacher/alumni যেসব রিকোয়েস্ট পেয়েছে
     app.get('/requests/recipient/:email', async (req, res) => {
       const result = await requestsCollection.find({ recipientEmail: req.params.email }).toArray();
       res.send(result);
     });
 
-    // Accept/Reject করার জন্য
     app.patch('/requests/:id', async (req, res) => {
       const result = await requestsCollection.updateOne(
         { _id: new ObjectId(req.params.id) },
-        { $set: { status: req.body.status } } // 'accepted' or 'rejected'
+        { $set: { status: req.body.status } }
       );
       res.send(result);
     });
 
-    // স্টুডেন্ট রিকোয়েস্ট cancel করলে
     app.delete('/requests/:id', async (req, res) => {
       const result = await requestsCollection.deleteOne({ _id: new ObjectId(req.params.id) });
       res.send(result);
     });
 
-    // ===== Daily Supervision Reminder (every day 9:00 AM) =====
-    cron.schedule('0 */12 * * *', async () => {
+    // ===== Daily Supervision Reminder =====
+    cron.schedule('* * * * *', async () => {
       console.log('Running supervision reminder job...');
 
       const accepted = await requestsCollection.find({ status: 'accepted' }).toArray();
 
-      // group by recipientEmail (teacher), then by postId
       const byTeacher = {};
       accepted.forEach((req) => {
-        if (!req.recipientEmail || !req.postTitle) return; // skip mentorship-only requests
+        if (!req.recipientEmail || !req.postTitle) return;
         if (!byTeacher[req.recipientEmail]) {
           byTeacher[req.recipientEmail] = { recipientName: req.recipientName, projects: {} };
         }
