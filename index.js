@@ -1,7 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import cron from 'node-cron';
 import { MongoClient, ServerApiVersion, ObjectId } from 'mongodb';
+import { sendSupervisionReminder } from './utils/mailer.js';
 
 dotenv.config();
 
@@ -32,7 +34,7 @@ async function run() {
     const db = client.db('mentora');
 
     // ৩টা collection: users, posts, requests
-    const usersCollection = db.collection('users');
+    const usersCollection = db.collection('user');
     const postsCollection = db.collection('posts');
     const requestsCollection = db.collection('requests');
 
@@ -56,17 +58,26 @@ async function run() {
     // লগইনের পর email দিয়ে ইউজারের role চেক করার জন্য
     app.get('/users/:email', async (req, res) => {
       const result = await usersCollection.findOne({ email: req.params.email });
-      res.send(result);
+      res.send(result || {});
     });
 
     // নির্দিষ্ট role এর সব ইউজার (যেমন সব teacher/alumni)
     app.get('/users', async (req, res) => {
-      const role = req.query.role;
-      const query = role ? { role } : {};
-      const result = await usersCollection.find(query).toArray();
-      res.send(result);
-    });
+  const role = req.query.role;
+  const query = role ? { role: new RegExp(`^${role}$`, 'i') } : {}; // case-insensitive match
+  const result = await usersCollection.find(query).toArray();
+  res.send(result);
+});
 
+    // PATCH update own profile (name, skills, cgpa, company, designation etc.)
+app.patch('/users/:email', async (req, res) => {
+  const result = await usersCollection.updateOne(
+    { email: req.params.email },
+    { $set: { ...req.body, email: req.params.email } },
+    { upsert: true }
+  );
+  res.send(result);
+});
     // ===== POST রুট (job / internship / research) =====
 
     // সব পোস্ট (ফিড) — ?type=job/internship/research দিয়ে ফিল্টার করা যাবে
@@ -115,7 +126,7 @@ async function run() {
 
     // ===== REQUEST রুট (interest + mentorship) =====
 
-    // স্টুডেন্ট Interest বাটনে ক্লিক করলে বা মেন্টরশিপ রিকোয়েস্ট পাঠালে
+    // student Interest click button or mentor request send
     app.post('/requests', async (req, res) => {
       const request = req.body;
       // { postId (optional), studentEmail, studentName, recipientEmail, type: post_interest/mentorship, message }
@@ -157,6 +168,40 @@ async function run() {
     app.delete('/requests/:id', async (req, res) => {
       const result = await requestsCollection.deleteOne({ _id: new ObjectId(req.params.id) });
       res.send(result);
+    });
+
+    // ===== Daily Supervision Reminder (every day 9:00 AM) =====
+    cron.schedule('0 */12 * * *', async () => {
+      console.log('Running supervision reminder job...');
+
+      const accepted = await requestsCollection.find({ status: 'accepted' }).toArray();
+
+      // group by recipientEmail (teacher), then by postId
+      const byTeacher = {};
+      accepted.forEach((req) => {
+        if (!req.recipientEmail || !req.postTitle) return; // skip mentorship-only requests
+        if (!byTeacher[req.recipientEmail]) {
+          byTeacher[req.recipientEmail] = { recipientName: req.recipientName, projects: {} };
+        }
+        const key = req.postId || req.postTitle;
+        if (!byTeacher[req.recipientEmail].projects[key]) {
+          byTeacher[req.recipientEmail].projects[key] = { postTitle: req.postTitle, students: [] };
+        }
+        byTeacher[req.recipientEmail].projects[key].students.push(req);
+      });
+
+      for (const [teacherEmail, data] of Object.entries(byTeacher)) {
+        try {
+          await sendSupervisionReminder(
+            teacherEmail,
+            data.recipientName,
+            Object.values(data.projects)
+          );
+          console.log(`Reminder sent to ${teacherEmail}`);
+        } catch (err) {
+          console.error(`Failed to send to ${teacherEmail}:`, err.message);
+        }
+      }
     });
 
   } finally {
