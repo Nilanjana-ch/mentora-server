@@ -28,7 +28,7 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
     console.log("MongoDB connected!");
 
     const db = client.db('mentora');
@@ -169,7 +169,7 @@ async function run() {
     });
 
     // ===== Daily Supervision Reminder =====
-    cron.schedule('* * * * *', async () => {
+    cron.schedule('0 0 1 * *', async () => { // give notification in the first day of every month at 00:00
       console.log('Running supervision reminder job...');
 
       const accepted = await requestsCollection.find({ status: 'accepted' }).toArray();
